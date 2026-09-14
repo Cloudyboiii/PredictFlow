@@ -16,6 +16,37 @@ from config import get_settings
 import warnings
 warnings.filterwarnings("ignore")
 
+import math
+
+def clean_float(val):
+    """Replace NaN/Infinity with 0.0 for JSON compliance."""
+    if val is None:
+        return None
+    try:
+        if math.isnan(val) or math.isinf(val):
+            return 0.0
+        return val
+    except (TypeError, ValueError):
+        return val
+
+def clean_metrics(metrics: dict) -> dict:
+    """Recursively clean all float values in metrics dict."""
+    cleaned = {}
+    for key, val in metrics.items():
+        if isinstance(val, float):
+            cleaned[key] = clean_float(val)
+        elif isinstance(val, list):
+            cleaned[key] = [
+                {k: clean_float(v) if isinstance(v, float) else v for k, v in item.items()}
+                if isinstance(item, dict) else item
+                for item in val
+            ]
+        elif isinstance(val, dict):
+            cleaned[key] = clean_metrics(val)
+        else:
+            cleaned[key] = val
+    return cleaned
+
 settings = get_settings()
 
 # Store trained models per session
@@ -99,7 +130,7 @@ def compute_metrics(y_true, y_pred, y_prob, num_classes):
         except Exception:
             roc_data = []
 
-    return {
+    return clean_metrics({
         "accuracy": round(acc, 4),
         "precision": round(prec, 4),
         "recall": round(rec, 4),
@@ -107,7 +138,7 @@ def compute_metrics(y_true, y_pred, y_prob, num_classes):
         "roc_auc": round(roc_auc, 4),
         "confusion_matrix": cm,
         "roc_curve": roc_data,
-    }
+    })
 
 
 def train_all_models(session_id: str, df: pd.DataFrame, target_col: str) -> dict:
@@ -126,8 +157,8 @@ def train_all_models(session_id: str, df: pd.DataFrame, target_col: str) -> dict
         y_prob = lr.predict_proba(X_test)
         cv = cross_val_score(lr, X, y, cv=min(settings.CV_FOLDS, len(set(y))), scoring="accuracy")
         metrics = compute_metrics(y_test, y_pred, y_prob, num_classes)
-        metrics["cv_mean"] = round(float(cv.mean()), 4)
-        metrics["cv_std"] = round(float(cv.std()), 4)
+        metrics["cv_mean"] = clean_float(round(float(cv.mean()), 4))
+        metrics["cv_std"] = clean_float(round(float(cv.std()), 4))
 
         # Feature importance (coefficients for binary)
         if num_classes == 2 and hasattr(lr, "coef_"):
@@ -154,8 +185,8 @@ def train_all_models(session_id: str, df: pd.DataFrame, target_col: str) -> dict
         y_prob = rf.predict_proba(X_test)
         cv = cross_val_score(rf, X, y, cv=min(settings.CV_FOLDS, len(set(y))), scoring="accuracy")
         metrics = compute_metrics(y_test, y_pred, y_prob, num_classes)
-        metrics["cv_mean"] = round(float(cv.mean()), 4)
-        metrics["cv_std"] = round(float(cv.std()), 4)
+        metrics["cv_mean"] = clean_float(round(float(cv.mean()), 4))
+        metrics["cv_std"] = clean_float(round(float(cv.std()), 4))
 
         fi = rf.feature_importances_
         fi_pairs = sorted(zip(feature_names, fi.tolist()), key=lambda x: x[1], reverse=True)[:10]
@@ -181,8 +212,8 @@ def train_all_models(session_id: str, df: pd.DataFrame, target_col: str) -> dict
         y_prob = xgb_model.predict_proba(X_test)
         cv = cross_val_score(xgb_model, X, y, cv=min(settings.CV_FOLDS, len(set(y))), scoring="accuracy")
         metrics = compute_metrics(y_test, y_pred, y_prob, num_classes)
-        metrics["cv_mean"] = round(float(cv.mean()), 4)
-        metrics["cv_std"] = round(float(cv.std()), 4)
+        metrics["cv_mean"] = clean_float(round(float(cv.mean()), 4))
+        metrics["cv_std"] = clean_float(round(float(cv.std()), 4))
 
         fi = xgb_model.feature_importances_
         fi_pairs = sorted(zip(feature_names, fi.tolist()), key=lambda x: x[1], reverse=True)[:10]
