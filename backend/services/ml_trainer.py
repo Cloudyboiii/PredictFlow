@@ -141,7 +141,9 @@ def compute_metrics(y_true, y_pred, y_prob, num_classes):
     })
 
 
-def train_all_models(session_id: str, df: pd.DataFrame, target_col: str) -> dict:
+def train_all_models(session_id: str, df: pd.DataFrame, target_col: str, feature_columns: list[str] | None = None) -> dict:
+    if feature_columns:
+        df = df[feature_columns + [target_col]]
     X, y, le, scaler, num_classes, feature_names = preprocess(df, target_col)
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=settings.TEST_SIZE, random_state=settings.RANDOM_STATE, stratify=y

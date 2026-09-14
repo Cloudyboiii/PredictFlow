@@ -25,11 +25,11 @@ export const uploadCSV = (file: File) => {
   return request("/api/upload", { method: "POST", body: form });
 };
 
-export const trainModels = (target_column: string) =>
+export const trainModels = (target_column: string, feature_columns?: string[]) =>
   request("/api/train", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ target_column }),
+    body: JSON.stringify({ target_column, feature_columns }),
   });
 
 export const predict = (features: Record<string, number>, model_name = "best") =>

@@ -9,9 +9,9 @@ import { uploadCSV, trainModels, predict, deleteDataset } from "@/lib/api";
 /* ---- Types ---- */
 interface ColInfo { name: string; type: string; null_count: number; unique_count: number; sample_values: any[]; }
 interface Dataset { filename: string; row_count: number; column_count: number; columns: ColInfo[]; }
-interface Metrics { accuracy: number; precision: number; recall: number; f1_score: number; roc_auc: number; cv_mean: number | null; cv_std: number | null; confusion_matrix: number[][]; roc_curve: { fpr: number; tpr: number }[]; }
+interface Metrics { accuracy?: number; precision?: number; recall?: number; f1_score?: number; roc_auc?: number; cv_mean: number | null; cv_std: number | null; confusion_matrix?: number[][]; roc_curve?: { fpr: number; tpr: number }[]; mae?: number; rmse?: number; r2_score?: number; mape?: number; residual_plot?: {actual: number, predicted: number}[]; }
 interface ModelResult { name: string; metrics: Metrics; feature_importance: { feature: string; importance: number }[]; is_best: boolean; error?: string; }
-interface TrainResult { models: ModelResult[]; best_model: string; target_col: string; label_classes: string[]; num_classes: number; feature_names: string[]; training_samples: number; test_samples: number; }
+interface TrainResult { models: ModelResult[]; best_model: string; target_col: string; label_classes: string[]; num_classes: number; feature_names: string[]; training_samples: number; test_samples: number; task_type: "classification" | "regression"; }
 
 const MODEL_COLORS: Record<string, string> = {
   "Logistic Regression": "#6366f1",
@@ -28,6 +28,7 @@ const METRICS_LABELS: Record<string, string> = {
 export default function Home() {
   const [dataset, setDataset] = useState<Dataset | null>(null);
   const [target, setTarget] = useState("");
+  const [selectedColumns, setSelectedColumns] = useState<string[]>([]);
   const [trainResult, setTrainResult] = useState<TrainResult | null>(null);
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [activeTab, setActiveTab] = useState<"metrics" | "roc" | "features" | "predict">("metrics");
@@ -47,6 +48,13 @@ export default function Home() {
     try {
       const res = await uploadCSV(file);
       setDataset(res);
+      const cols: string[] = [];
+      res.columns.forEach((c: ColInfo) => {
+        const nameLower = c.name.toLowerCase();
+        const isId = nameLower.includes("id") || c.unique_count === res.row_count;
+        if (!isId) cols.push(c.name);
+      });
+      setSelectedColumns(cols);
     } catch (e: any) { setError(e.message); }
     finally { setUploading(false); }
   }, []);
@@ -62,7 +70,8 @@ export default function Home() {
     if (!target) { setError("Please select a target column."); return; }
     setTraining(true); setError(null); setTrainResult(null); setPrediction(null);
     try {
-      const res = await trainModels(target);
+      const featureCols = selectedColumns.filter(c => c !== target);
+      const res = await trainModels(target, featureCols);
       setTrainResult(res);
       setSelectedModel(res.best_model);
       setActiveTab("metrics");
@@ -204,14 +213,56 @@ export default function Home() {
             {/* Target selector + Train */}
             {!trainResult && (
               <div className="bg-white rounded-xl border border-border p-5">
+                <div className="mb-6 border-b border-border pb-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <h3 className="text-[14px] font-semibold text-text mb-1">Select Feature Columns</h3>
+                      <p className="text-[12px] text-text-muted">Choose which columns to include in the training data.</p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={() => setSelectedColumns(dataset.columns.map(c => c.name))} className="text-[12px] px-3 py-1 rounded border border-border text-text-secondary hover:bg-surface-muted">Select All</button>
+                      <button onClick={() => setSelectedColumns([])} className="text-[12px] px-3 py-1 rounded border border-border text-text-secondary hover:bg-surface-muted">Deselect All</button>
+                    </div>
+                  </div>
+                  <div className="max-h-64 overflow-y-auto border border-border rounded-lg">
+                    <table className="w-full text-[12px] text-left">
+                      <thead className="bg-surface sticky top-0 border-b border-border">
+                        <tr>
+                          <th className="px-3 py-2 font-medium text-text-secondary w-8"></th>
+                          <th className="px-3 py-2 font-medium text-text-secondary">Column Name</th>
+                          <th className="px-3 py-2 font-medium text-text-secondary">Type</th>
+                          <th className="px-3 py-2 font-medium text-text-secondary text-right">Unique</th>
+                          <th className="px-3 py-2 font-medium text-text-secondary text-right">Missing</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {dataset.columns.map(c => (
+                          <tr key={c.name} className="hover:bg-surface-muted/50 transition-colors">
+                            <td className="px-3 py-2">
+                              <input type="checkbox" checked={selectedColumns.includes(c.name)} onChange={(e) => {
+                                if (e.target.checked) setSelectedColumns(prev => [...prev, c.name]);
+                                else setSelectedColumns(prev => prev.filter(n => n !== c.name));
+                              }} className="rounded border-border text-brand focus:ring-brand"/>
+                            </td>
+                            <td className="px-3 py-2 font-medium text-text">{c.name}</td>
+                            <td className="px-3 py-2 text-text-muted">{c.type}</td>
+                            <td className="px-3 py-2 text-text-muted text-right">{c.unique_count}</td>
+                            <td className="px-3 py-2 text-text-muted text-right">{c.null_count}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
                 <h3 className="text-[14px] font-semibold text-text mb-1">Select Target Column</h3>
-                <p className="text-[12px] text-text-muted mb-4">Choose the column you want to predict. Must be a classification target (2–20 unique values).</p>
+                <p className="text-[12px] text-text-muted mb-4">Choose the column you want to predict (Classification or Regression).</p>
                 <div className="flex gap-3">
                   <select value={target} onChange={(e) => setTarget(e.target.value)}
                     className="flex-1 h-10 px-3 rounded-lg border border-border text-[13px] text-text focus:outline-none focus:border-brand/40">
                     <option value="">-- Select target column --</option>
-                    {dataset.columns.filter(c => c.unique_count >= 2 && c.unique_count <= 20).map(c => (
-                      <option key={c.name} value={c.name}>{c.name} ({c.unique_count} classes)</option>
+                    {dataset.columns.map(c => (
+                      <option key={c.name} value={c.name}>{c.name} ({c.unique_count} unique vals)</option>
                     ))}
                   </select>
                   <button onClick={handleTrain} disabled={training || !target}
@@ -242,13 +293,25 @@ export default function Home() {
                     <span className="text-lg">🏆</span>
                   </div>
                   <div className="flex-1">
-                    <p className="text-[13px] font-semibold text-text">Best Model: {trainResult.best_model}</p>
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <p className="text-[13px] font-semibold text-text">Best Model: {trainResult.best_model}</p>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${trainResult.task_type === 'regression' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
+                        {trainResult.task_type === 'regression' ? 'Regression' : 'Classification'}
+                      </span>
+                    </div>
                     <p className="text-[12px] text-text-muted">
-                      ROC-AUC: {trainResult.models.find(m => m.name === trainResult.best_model)?.metrics.roc_auc.toFixed(4)} · 
-                      Accuracy: {trainResult.models.find(m => m.name === trainResult.best_model)?.metrics.accuracy.toFixed(4)} · 
-                      {trainResult.training_samples} training / {trainResult.test_samples} test samples
+                      {trainResult.task_type === 'regression' ? (
+                        <>R² Score: {trainResult.models.find(m => m.name === trainResult.best_model)?.metrics.r2_score?.toFixed(4)} · MAE: {trainResult.models.find(m => m.name === trainResult.best_model)?.metrics.mae?.toFixed(4)}</>
+                      ) : (
+                        <>ROC-AUC: {trainResult.models.find(m => m.name === trainResult.best_model)?.metrics.roc_auc?.toFixed(4)} · Accuracy: {trainResult.models.find(m => m.name === trainResult.best_model)?.metrics.accuracy?.toFixed(4)}</>
+                      )}
+                      {' '}· {trainResult.training_samples} training / {trainResult.test_samples} test samples
                     </p>
                   </div>
+                  <a href={`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:10000"}/api/download/best`}
+                    className="text-[12px] px-3 h-8 flex items-center justify-center rounded-lg border border-brand text-brand hover:bg-brand/[0.05] transition-colors" title="Download trained model as .pkl for deployment">
+                    Download Model
+                  </a>
                   <button onClick={() => { setTrainResult(null); setPrediction(null); }}
                     className="text-[12px] px-3 h-8 rounded-lg border border-border text-text-muted hover:text-brand hover:border-brand/30 transition-colors">
                     Retrain
@@ -258,12 +321,19 @@ export default function Home() {
                 {/* Model selector */}
                 <div className="flex gap-2 flex-wrap">
                   {trainResult.models.filter(m => !m.error).map(m => (
-                    <button key={m.name} onClick={() => setSelectedModel(m.name)}
-                      className={`flex items-center gap-2 px-4 py-2 rounded-xl border text-[12px] font-medium transition-all ${selectedModel === m.name ? "border-brand bg-brand/[0.06] text-brand" : "border-border text-text-secondary hover:border-brand/30"}`}>
-                      <span className="w-2.5 h-2.5 rounded-full" style={{ background: MODEL_COLORS[m.name] }}/>
-                      {m.name}
-                      {m.is_best && <span className="text-[10px] bg-brand/10 text-brand px-1.5 py-0.5 rounded">Best</span>}
-                    </button>
+                    <div key={m.name} className="flex">
+                      <button onClick={() => setSelectedModel(m.name)}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-l-xl border border-r-0 text-[12px] font-medium transition-all ${selectedModel === m.name ? "border-brand bg-brand/[0.06] text-brand" : "border-border text-text-secondary hover:border-brand/30"}`}>
+                        <span className="w-2.5 h-2.5 rounded-full" style={{ background: MODEL_COLORS[m.name] }}/>
+                        {m.name}
+                        {m.is_best && <span className="text-[10px] bg-brand/10 text-brand px-1.5 py-0.5 rounded">Best</span>}
+                      </button>
+                      <a href={`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:10000"}/api/download/${encodeURIComponent(m.name)}`}
+                         className={`flex items-center px-2 border rounded-r-xl transition-colors ${selectedModel === m.name ? "border-brand bg-brand/[0.06] text-brand hover:bg-brand/10" : "border-border text-text-muted hover:text-text hover:bg-surface-muted"}`}
+                         title="Download model (.pkl)">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                      </a>
+                    </div>
                   ))}
                 </div>
 
@@ -274,7 +344,7 @@ export default function Home() {
                       {(["metrics", "roc", "features", "predict"] as const).map(tab => (
                         <button key={tab} onClick={() => setActiveTab(tab)}
                           className={`px-5 py-3 text-[13px] font-medium capitalize transition-colors ${activeTab === tab ? "border-b-2 border-brand text-brand" : "text-text-muted hover:text-text-secondary"}`}>
-                          {tab === "roc" ? "ROC Curve" : tab === "features" ? "Feature Importance" : tab === "predict" ? "Predict" : "Metrics"}
+                          {tab === "roc" ? (trainResult.task_type === "regression" ? "Residual Plot" : "ROC Curve") : tab === "features" ? "Feature Importance" : tab === "predict" ? "Predict" : "Metrics"}
                         </button>
                       ))}
                     </div>
@@ -284,29 +354,66 @@ export default function Home() {
                       {activeTab === "metrics" && (
                         <div>
                           {/* Metric cards */}
-                          <div className="grid grid-cols-5 gap-3 mb-6">
-                            {Object.entries(METRICS_LABELS).map(([key, label]) => {
-                              const val = (currentModel.metrics as any)[key];
-                              return (
-                                <div key={key} className="bg-surface-muted rounded-xl p-3 text-center border border-border">
-                                  <p className="text-[22px] font-bold text-brand">{(val * 100).toFixed(1)}%</p>
-                                  <p className="text-[11px] text-text-muted mt-0.5">{label}</p>
-                                  {currentModel.metrics.cv_mean !== null && key === "accuracy" && (
-                                    <p className="text-[10px] text-text-muted mt-0.5">CV: {((currentModel.metrics.cv_mean ?? 0) * 100).toFixed(1)}±{((currentModel.metrics.cv_std ?? 0) * 100).toFixed(1)}%</p>
-                                  )}
-                                </div>
-                              );
-                            })}
+                          <div className="grid grid-cols-4 md:grid-cols-5 gap-3 mb-6">
+                            {trainResult.task_type === 'regression' ? (
+                              <>
+                                {[
+                                  { k: 'r2_score', l: 'R² Score' },
+                                  { k: 'mae', l: 'MAE' },
+                                  { k: 'rmse', l: 'RMSE' },
+                                  { k: 'mape', l: 'MAPE' },
+                                ].map(({k, l}) => {
+                                  const val = (currentModel.metrics as any)[k];
+                                  return (
+                                    <div key={k} className="bg-surface-muted rounded-xl p-3 text-center border border-border">
+                                      <p className="text-[20px] font-bold text-brand">{val?.toFixed(4) || "N/A"}</p>
+                                      <p className="text-[11px] text-text-muted mt-0.5">{l}</p>
+                                      {currentModel.metrics.cv_mean !== null && k === "r2_score" && (
+                                        <p className="text-[10px] text-text-muted mt-0.5">CV: {currentModel.metrics.cv_mean?.toFixed(4)}±{currentModel.metrics.cv_std?.toFixed(4)}</p>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </>
+                            ) : (
+                              Object.entries(METRICS_LABELS).map(([key, label]) => {
+                                const val = (currentModel.metrics as any)[key];
+                                return (
+                                  <div key={key} className="bg-surface-muted rounded-xl p-3 text-center border border-border">
+                                    <p className="text-[22px] font-bold text-brand">{(val * 100).toFixed(1)}%</p>
+                                    <p className="text-[11px] text-text-muted mt-0.5">{label}</p>
+                                    {currentModel.metrics.cv_mean !== null && key === "accuracy" && (
+                                      <p className="text-[10px] text-text-muted mt-0.5">CV: {((currentModel.metrics.cv_mean ?? 0) * 100).toFixed(1)}±{((currentModel.metrics.cv_std ?? 0) * 100).toFixed(1)}%</p>
+                                    )}
+                                  </div>
+                                );
+                              })
+                            )}
                           </div>
 
                           {/* Model comparison chart */}
                           <h4 className="text-[13px] font-semibold text-text mb-3">Model Comparison</h4>
                           <ResponsiveContainer width="100%" height={220}>
-                            <BarChart data={comparisonData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                            <BarChart data={trainResult.task_type === 'regression' ? 
+                              [
+                                { metric: 'R² Score' }, { metric: 'MAE' }, { metric: 'RMSE' }, { metric: 'MAPE' }
+                              ].map(r => {
+                                const row: any = { metric: r.metric };
+                                const key = r.metric === 'R² Score' ? 'r2_score' : r.metric.toLowerCase();
+                                trainResult.models.forEach(m => {
+                                  if (!m.error) row[m.name] = (m.metrics as any)[key] ?? 0;
+                                });
+                                return row;
+                              })
+                            : comparisonData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
                               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0"/>
                               <XAxis dataKey="metric" tick={{ fontSize: 11, fill: "#64748b" }}/>
-                              <YAxis domain={[0, 1]} tick={{ fontSize: 11, fill: "#64748b" }} tickFormatter={v => `${(v*100).toFixed(0)}%`}/>
-                              <Tooltip formatter={(v: any) => `${(v*100).toFixed(1)}%`} contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8f0" }}/>
+                              {trainResult.task_type === 'regression' ? (
+                                <YAxis tick={{ fontSize: 11, fill: "#64748b" }} />
+                              ) : (
+                                <YAxis domain={[0, 1]} tick={{ fontSize: 11, fill: "#64748b" }} tickFormatter={v => `${(v*100).toFixed(0)}%`}/>
+                              )}
+                              <Tooltip formatter={(v: any) => trainResult.task_type === 'regression' ? Number(v).toFixed(4) : `${(Number(v)*100).toFixed(1)}%`} contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8f0" }}/>
                               <Legend wrapperStyle={{ fontSize: 12 }}/>
                               {trainResult.models.filter(m => !m.error).map(m => (
                                 <Bar key={m.name} dataKey={m.name} fill={MODEL_COLORS[m.name]} radius={[3,3,0,0]}/>
@@ -347,24 +454,48 @@ export default function Home() {
                         </div>
                       )}
 
-                      {/* ROC tab */}
+                      {/* ROC / Residual tab */}
                       {activeTab === "roc" && (
                         <div>
-                          {currentModel.metrics.roc_curve && currentModel.metrics.roc_curve.length > 0 ? (
+                          {trainResult.task_type === "regression" ? (
                             <>
-                              <p className="text-[12px] text-text-muted mb-3">ROC-AUC: <span className="font-semibold text-brand">{currentModel.metrics.roc_auc.toFixed(4)}</span> (closer to 1.0 = better)</p>
-                              <ResponsiveContainer width="100%" height={320}>
-                                <LineChart data={currentModel.metrics.roc_curve} margin={{ top: 10, right: 20, left: 0, bottom: 20 }}>
-                                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0"/>
-                                  <XAxis dataKey="fpr" label={{ value: "False Positive Rate", position: "bottom", fontSize: 11 }} tick={{ fontSize: 11, fill: "#64748b" }} tickFormatter={v => v.toFixed(2)}/>
-                                  <YAxis label={{ value: "True Positive Rate", angle: -90, position: "insideLeft", fontSize: 11 }} tick={{ fontSize: 11, fill: "#64748b" }} tickFormatter={v => v.toFixed(2)}/>
-                                  <Tooltip formatter={(v: any) => v.toFixed(3)} contentStyle={{ fontSize: 12, borderRadius: 8 }}/>
-                                  <Line type="monotone" dataKey="tpr" stroke={MODEL_COLORS[selectedModel]} strokeWidth={2} dot={false} name="ROC Curve"/>
-                                </LineChart>
-                              </ResponsiveContainer>
+                              {currentModel.metrics.residual_plot && currentModel.metrics.residual_plot.length > 0 ? (
+                                <>
+                                  <p className="text-[12px] text-text-muted mb-3">Actual vs Predicted values (closer to diagonal line = better)</p>
+                                  <ResponsiveContainer width="100%" height={320}>
+                                    <LineChart data={[...currentModel.metrics.residual_plot].sort((a: any,b: any) => a.actual - b.actual)} margin={{ top: 10, right: 20, left: 0, bottom: 20 }}>
+                                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0"/>
+                                      <XAxis dataKey="actual" label={{ value: "Actual", position: "bottom", fontSize: 11 }} tick={{ fontSize: 11, fill: "#64748b" }}/>
+                                      <YAxis label={{ value: "Predicted", angle: -90, position: "insideLeft", fontSize: 11 }} tick={{ fontSize: 11, fill: "#64748b" }}/>
+                                      <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }}/>
+                                      <Line type="monotone" dataKey="actual" stroke="#cbd5e1" strokeDasharray="5 5" dot={false} strokeWidth={2} name="Perfect Prediction"/>
+                                      <Line type="monotone" dataKey="predicted" stroke={MODEL_COLORS[selectedModel]} strokeWidth={0} dot={{ r: 4, fill: MODEL_COLORS[selectedModel], strokeWidth: 0 }} name="Predicted"/>
+                                    </LineChart>
+                                  </ResponsiveContainer>
+                                </>
+                              ) : (
+                                <p className="text-[13px] text-text-muted">Residual plot data not available.</p>
+                              )}
                             </>
                           ) : (
-                            <p className="text-[13px] text-text-muted">ROC curve available for binary classification only.</p>
+                            <>
+                              {currentModel.metrics.roc_curve && currentModel.metrics.roc_curve.length > 0 ? (
+                                <>
+                                  <p className="text-[12px] text-text-muted mb-3">ROC-AUC: <span className="font-semibold text-brand">{currentModel.metrics.roc_auc?.toFixed(4)}</span> (closer to 1.0 = better)</p>
+                                  <ResponsiveContainer width="100%" height={320}>
+                                    <LineChart data={currentModel.metrics.roc_curve} margin={{ top: 10, right: 20, left: 0, bottom: 20 }}>
+                                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0"/>
+                                      <XAxis dataKey="fpr" label={{ value: "False Positive Rate", position: "bottom", fontSize: 11 }} tick={{ fontSize: 11, fill: "#64748b" }} tickFormatter={v => v.toFixed(2)}/>
+                                      <YAxis label={{ value: "True Positive Rate", angle: -90, position: "insideLeft", fontSize: 11 }} tick={{ fontSize: 11, fill: "#64748b" }} tickFormatter={v => v.toFixed(2)}/>
+                                      <Tooltip formatter={(v: any) => Number(v).toFixed(3)} contentStyle={{ fontSize: 12, borderRadius: 8 }}/>
+                                      <Line type="monotone" dataKey="tpr" stroke={MODEL_COLORS[selectedModel]} strokeWidth={2} dot={false} name="ROC Curve"/>
+                                    </LineChart>
+                                  </ResponsiveContainer>
+                                </>
+                              ) : (
+                                <p className="text-[13px] text-text-muted">ROC curve available for binary classification only.</p>
+                              )}
+                            </>
                           )}
                         </div>
                       )}
@@ -414,23 +545,29 @@ export default function Home() {
                             <div className="mt-5 p-4 rounded-xl bg-surface-muted border border-border">
                               <p className="text-[12px] text-text-muted mb-3">Prediction Result</p>
                               <div className="flex items-center gap-3 mb-4">
-                                <div className="px-4 py-2 rounded-xl bg-brand text-white font-bold text-[18px]">{prediction.prediction}</div>
+                                <div className="px-4 py-2 rounded-xl bg-brand text-white font-bold text-[18px]">
+                                  {trainResult.task_type === 'regression' ? Number(prediction.prediction).toFixed(4) : prediction.prediction}
+                                </div>
                                 <div>
-                                  <p className="text-[13px] font-semibold text-text">{prediction.confidence}% confident</p>
+                                  {trainResult.task_type !== 'regression' && (
+                                    <p className="text-[13px] font-semibold text-text">{prediction.confidence}% confident</p>
+                                  )}
                                   <p className="text-[11px] text-text-muted">Model: {prediction.model_used}</p>
                                 </div>
                               </div>
-                              <div className="space-y-2">
-                                {Object.entries(prediction.probabilities).map(([cls, prob]: [string, any]) => (
-                                  <div key={cls} className="flex items-center gap-2">
-                                    <span className="text-[12px] text-text-secondary w-20 truncate">{cls}</span>
-                                    <div className="flex-1 h-2 bg-border rounded-full overflow-hidden">
-                                      <div className="h-full bg-brand rounded-full transition-all" style={{ width: `${prob}%` }}/>
+                              {trainResult.task_type !== 'regression' && prediction.probabilities && (
+                                <div className="space-y-2">
+                                  {Object.entries(prediction.probabilities).map(([cls, prob]: [string, any]) => (
+                                    <div key={cls} className="flex items-center gap-2">
+                                      <span className="text-[12px] text-text-secondary w-20 truncate">{cls}</span>
+                                      <div className="flex-1 h-2 bg-border rounded-full overflow-hidden">
+                                        <div className="h-full bg-brand rounded-full transition-all" style={{ width: `${prob}%` }}/>
+                                      </div>
+                                      <span className="text-[12px] text-text-secondary w-12 text-right">{prob}%</span>
                                     </div>
-                                    <span className="text-[12px] text-text-secondary w-12 text-right">{prob}%</span>
-                                  </div>
-                                ))}
-                              </div>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                           )}
                         </div>
