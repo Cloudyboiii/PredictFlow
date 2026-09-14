@@ -15,6 +15,7 @@ app = FastAPI(title="PredictFlow API", version="1.0.0")
 origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "https://predict-flow.vercel.app",
 ]
 prod_url = os.getenv("FRONTEND_URL")
 if prod_url:
