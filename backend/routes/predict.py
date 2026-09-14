@@ -40,9 +40,10 @@ async def predict(
 
     try:
         # Build feature vector
-        row = [req.features.get(f, 0) for f in feature_names]
-        X = np.array([row], dtype=float)
-        X_scaled = scaler.transform(X)
+        row_dict = {f: req.features.get(f, 0) for f in feature_names}
+        df = pd.DataFrame([row_dict])
+        from services.ml_trainer import preprocess_inference
+        X_scaled = preprocess_inference(df, trained)
 
         if model_name == "Neural Network":
             import torch
@@ -118,15 +119,8 @@ async def predict_batch(
     try:
         content = await file.read()
         df = pd.read_csv(io.BytesIO(content))
-        
-        # Fill missing features with 0
-        for f in feature_names:
-            if f not in df.columns:
-                df[f] = 0
-                
-        # Extract features in correct order
-        X_df = df[feature_names].fillna(0)
-        X_scaled = scaler.transform(X_df.values)
+        from services.ml_trainer import preprocess_inference
+        X_scaled = preprocess_inference(df, trained)
         
         if target_model_name == "Neural Network":
             import torch

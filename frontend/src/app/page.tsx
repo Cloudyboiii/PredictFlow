@@ -126,8 +126,15 @@ export default function Home() {
   const handlePredict = async () => {
     setPredicting(true); setError(null); setPrediction(null);
     try {
-      const features: Record<string, number> = {};
-      Object.entries(predictInputs).forEach(([k, v]) => { features[k] = parseFloat(v) || 0; });
+        const features: Record<string, any> = {};
+      Object.entries(predictInputs).forEach(([k, v]) => {
+          const colInfo = dataset?.columns.find(c => c.name === k);
+          if (colInfo?.type === 'numeric' || !isNaN(parseFloat(v))) {
+              features[k] = parseFloat(v) || 0;
+          } else {
+              features[k] = v;
+          }
+      });
       const res = await predict(features, selectedModel);
       setPrediction({ ...res, featuresUsed: features });
     } catch (e: any) { setError(e.message); }
@@ -717,7 +724,7 @@ export default function Home() {
                             {trainResult.feature_names.map(feat => (
                               <div key={feat}>
                                 <label className="block text-[11px] text-text-muted mb-1">{feat}</label>
-                                <input type="number" value={predictInputs[feat] || ""} onChange={(e) => setPredictInputs(prev => ({ ...prev, [feat]: e.target.value }))}
+                                <input type="text" value={predictInputs[feat] || ""} onChange={(e) => setPredictInputs(prev => ({ ...prev, [feat]: e.target.value }))}
                                   className="w-full h-9 px-3 rounded-lg border border-border text-[13px] text-text focus:outline-none focus:border-brand/40"
                                   placeholder="0"/>
                               </div>

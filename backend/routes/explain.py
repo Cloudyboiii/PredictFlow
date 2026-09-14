@@ -50,21 +50,13 @@ async def explain_prediction(
             if req.row_index < 0 or req.row_index >= len(df):
                 req.row_index = 0
             row_df = df.iloc[[req.row_index]]
-            # Fill missing features with 0
-            for f in feature_names:
-                if f not in row_df.columns:
-                    row_df[f] = 0
-                
-        X_row = row_df[feature_names].fillna(0).values
-        X_scaled = scaler.transform(X_row)
+        from services.ml_trainer import preprocess_inference
+        X_scaled = preprocess_inference(row_df, trained)
         
         # We need background data. We sample up to 50 rows from the dataset.
         bg_df = df.sample(min(50, len(df)), random_state=42)
-        for f in feature_names:
-            if f not in bg_df.columns:
-                bg_df[f] = 0
-        X_bg = bg_df[feature_names].fillna(0).values
-        X_bg_scaled = scaler.transform(X_bg)
+        X_bg = preprocess_inference(bg_df, trained)
+        X_bg_scaled = X_bg
 
         # Initialize Explainer
         if target_model_name in ["Random Forest", "XGBoost"]:

@@ -84,22 +84,57 @@ def preprocess(df: pd.DataFrame, target_col: str):
     num_cols = X.select_dtypes(include=[np.number]).columns.tolist()
     cat_cols = X.select_dtypes(exclude=[np.number]).columns.tolist()
 
+    num_imp = None
     # Impute numeric
     if num_cols:
         num_imp = SimpleImputer(strategy="mean")
         X[num_cols] = num_imp.fit_transform(X[num_cols])
 
     # Encode + impute categorical
+    cat_encoders = {}
     for col in cat_cols:
         X[col] = X[col].astype(str).fillna("missing")
         enc = LabelEncoder()
         X[col] = enc.fit_transform(X[col])
+        cat_encoders[col] = enc
 
     # Scale
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
-    return X_scaled, y_enc, le, scaler, num_classes, list(X.columns)
+    return X_scaled, y_enc, le, scaler, num_classes, list(X.columns), num_imp, cat_encoders, num_cols, cat_cols
+
+
+def preprocess_inference(df: pd.DataFrame, trained: dict) -> np.ndarray:
+    feature_names = trained["feature_names"]
+    num_cols = trained.get("num_cols", [])
+    cat_cols = trained.get("cat_cols", [])
+    num_imp = trained.get("num_imp")
+    cat_encoders = trained.get("cat_encoders", {})
+    scaler = trained["scaler"]
+    
+    # Fill missing features
+    for f in feature_names:
+        if f not in df.columns:
+            df[f] = 0
+            
+    df = df[feature_names].copy()
+    
+    if num_cols and num_imp:
+        # Avoid warnings or issues if DataFrame has different dtypes
+        df[num_cols] = num_imp.transform(df[num_cols].fillna(0))
+        
+    for col in cat_cols:
+        df[col] = df[col].astype(str).fillna("missing")
+        enc = cat_encoders.get(col)
+        if enc:
+            known_classes = set(enc.classes_)
+            # Default to first class if unseen
+            default_val = enc.classes_[0] if len(enc.classes_) > 0 else "missing"
+            df[col] = df[col].apply(lambda x: x if x in known_classes else default_val)
+            df[col] = enc.transform(df[col])
+            
+    return scaler.transform(df.values)
 
 
 def compute_metrics(y_true, y_pred, y_prob, num_classes):
@@ -144,7 +179,7 @@ def compute_metrics(y_true, y_pred, y_prob, num_classes):
 def train_all_models(session_id: str, df: pd.DataFrame, target_col: str, feature_columns: list[str] | None = None) -> dict:
     if feature_columns:
         df = df[feature_columns + [target_col]]
-    X, y, le, scaler, num_classes, feature_names = preprocess(df, target_col)
+    X, y, le, scaler, num_classes, feature_names, num_imp, cat_encoders, num_cols, cat_cols = preprocess(df, target_col)
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=settings.TEST_SIZE, random_state=settings.RANDOM_STATE, stratify=y
     )
@@ -293,6 +328,10 @@ def train_all_models(session_id: str, df: pd.DataFrame, target_col: str, feature
         "feature_names": feature_names,
         "target_col": target_col,
         "label_classes": le.classes_.tolist(),
+        "num_imp": num_imp,
+        "cat_encoders": cat_encoders,
+        "num_cols": num_cols,
+        "cat_cols": cat_cols,
     }
 
     # Build response (strip model objects)
