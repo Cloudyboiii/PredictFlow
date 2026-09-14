@@ -174,7 +174,6 @@ def train_all_models(session_id: str, df: pd.DataFrame, target_col: str) -> dict
             n_estimators=100,
             random_state=settings.RANDOM_STATE,
             eval_metric="logloss",
-            use_label_encoder=False,
             verbosity=0,
         )
         xgb_model.fit(X_train, y_train)
