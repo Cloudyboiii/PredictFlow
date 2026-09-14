@@ -16,10 +16,13 @@ origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
     "https://predict-flow.vercel.app",
+    "https://predict-flow.vercel.app/",
 ]
-prod_url = os.getenv("FRONTEND_URL")
-if prod_url:
-    origins.append(prod_url)
+
+frontend_url = os.getenv("FRONTEND_URL", "")
+if frontend_url and frontend_url not in origins:
+    origins.append(frontend_url)
+    origins.append(frontend_url.rstrip("/"))
 
 app.add_middleware(
     CORSMiddleware,
