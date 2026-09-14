@@ -10,6 +10,8 @@ from routes.train import router as train_router
 from routes.predict import router as predict_router
 from routes.health import router as health_router
 from routes.download import router as download_router
+from routes.profile import router as profile_router
+from routes.explain import router as explain_router
 
 app = FastAPI(title="PredictFlow API", version="1.0.0")
 
@@ -38,6 +40,8 @@ app.include_router(upload_router, prefix="/api")
 app.include_router(train_router, prefix="/api")
 app.include_router(predict_router, prefix="/api")
 app.include_router(download_router, prefix="/api")
+app.include_router(profile_router, prefix="/api")
+app.include_router(explain_router, prefix="/api")
 
 if __name__ == "__main__":
     import uvicorn

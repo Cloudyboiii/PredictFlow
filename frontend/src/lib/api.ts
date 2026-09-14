@@ -40,3 +40,28 @@ export const predict = (features: Record<string, number>, model_name = "best") =
   });
 
 export const deleteDataset = () => request("/api/dataset", { method: "DELETE" });
+
+export const batchPredict = async (file: File, model_name = "best") => {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("model_name", model_name);
+  const res = await fetch(`${API_BASE}/api/predict/batch`, {
+    method: "POST",
+    headers: { "X-Session-ID": getSessionId() },
+    body: form,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || `Batch prediction failed: ${res.status}`);
+  }
+  return res.blob();
+};
+
+export const profileDataset = () => request("/api/profile", { method: "POST" });
+
+export const explainPrediction = (model_name = "best", row_index = -1, features?: Record<string, number>) =>
+  request("/api/explain", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model_name, row_index, features }),
+  });

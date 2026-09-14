@@ -1,10 +1,10 @@
 "use client";
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, ResponsiveContainer, Cell, Legend
 } from "recharts";
-import { uploadCSV, trainModels, predict, deleteDataset } from "@/lib/api";
+import { uploadCSV, trainModels, predict, deleteDataset, batchPredict, profileDataset, explainPrediction } from "@/lib/api";
 
 /* ---- Types ---- */
 interface ColInfo { name: string; type: string; null_count: number; unique_count: number; sample_values: any[]; }
@@ -13,10 +13,22 @@ interface Metrics { accuracy?: number; precision?: number; recall?: number; f1_s
 interface ModelResult { name: string; metrics: Metrics; feature_importance: { feature: string; importance: number }[]; is_best: boolean; error?: string; }
 interface TrainResult { models: ModelResult[]; best_model: string; target_col: string; label_classes: string[]; num_classes: number; feature_names: string[]; training_samples: number; test_samples: number; task_type: "classification" | "regression"; }
 
+interface ProfileData {
+  columns: any[];
+  class_balance: any[];
+  correlation_matrix: any[];
+  overall_health_score: number;
+  row_count: number;
+  col_count: number;
+}
+
 const MODEL_COLORS: Record<string, string> = {
   "Logistic Regression": "#6366f1",
+  "Linear Regression": "#6366f1",
   "Random Forest": "#059669",
+  "Random Forest Regressor": "#059669",
   "XGBoost": "#d97706",
+  "XGBRegressor": "#d97706",
   "Neural Network": "#dc2626",
 };
 
@@ -31,7 +43,7 @@ export default function Home() {
   const [selectedColumns, setSelectedColumns] = useState<string[]>([]);
   const [trainResult, setTrainResult] = useState<TrainResult | null>(null);
   const [selectedModel, setSelectedModel] = useState<string>("");
-  const [activeTab, setActiveTab] = useState<"metrics" | "roc" | "features" | "predict">("metrics");
+  const [activeTab, setActiveTab] = useState<"metrics" | "roc" | "features" | "predict" | "explain">("metrics");
   const [uploading, setUploading] = useState(false);
   const [training, setTraining] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -40,11 +52,26 @@ export default function Home() {
   const [prediction, setPrediction] = useState<any>(null);
   const [predicting, setPredicting] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const batchFileRef = useRef<HTMLInputElement>(null);
+
+  // Feature 2: Profiling
+  const [profileData, setProfileData] = useState<ProfileData | null>(null);
+  const [showProfile, setShowProfile] = useState(true);
+  const [profiling, setProfiling] = useState(false);
+
+  // Feature 1: Batch predict
+  const [batchPredicting, setBatchPredicting] = useState(false);
+  const [batchMsg, setBatchMsg] = useState("");
+
+  // Feature 3: SHAP Explain
+  const [explainData, setExplainData] = useState<any>(null);
+  const [explaining, setExplaining] = useState(false);
+  const [explainingRow, setExplainingRow] = useState(0);
 
   /* Upload */
   const handleUpload = useCallback(async (file: File) => {
     if (!file.name.toLowerCase().endsWith(".csv")) { setError("Only CSV files accepted."); return; }
-    setUploading(true); setError(null); setTrainResult(null); setTarget("");
+    setUploading(true); setError(null); setTrainResult(null); setTarget(""); setProfileData(null);
     try {
       const res = await uploadCSV(file);
       setDataset(res);
@@ -55,6 +82,18 @@ export default function Home() {
         if (!isId) cols.push(c.name);
       });
       setSelectedColumns(cols);
+      
+      // Load profile
+      setProfiling(true);
+      try {
+        const prof = await profileDataset();
+        setProfileData(prof);
+        setShowProfile(true);
+      } catch (pe) {
+        console.error("Profiling failed", pe);
+      }
+      setProfiling(false);
+      
     } catch (e: any) { setError(e.message); }
     finally { setUploading(false); }
   }, []);
@@ -68,7 +107,7 @@ export default function Home() {
   /* Train */
   const handleTrain = async () => {
     if (!target) { setError("Please select a target column."); return; }
-    setTraining(true); setError(null); setTrainResult(null); setPrediction(null);
+    setTraining(true); setError(null); setTrainResult(null); setPrediction(null); setExplainData(null);
     try {
       const featureCols = selectedColumns.filter(c => c !== target);
       const res = await trainModels(target, featureCols);
@@ -85,20 +124,58 @@ export default function Home() {
 
   /* Predict */
   const handlePredict = async () => {
-    setPredicting(true); setError(null);
+    setPredicting(true); setError(null); setPrediction(null);
     try {
       const features: Record<string, number> = {};
       Object.entries(predictInputs).forEach(([k, v]) => { features[k] = parseFloat(v) || 0; });
       const res = await predict(features, selectedModel);
-      setPrediction(res);
+      setPrediction({ ...res, featuresUsed: features });
     } catch (e: any) { setError(e.message); }
     finally { setPredicting(false); }
+  };
+  
+  /* Batch Predict */
+  const handleBatchPredict = async (file: File) => {
+    if (!file.name.toLowerCase().endsWith(".csv")) { setError("Only CSV files accepted."); return; }
+    setBatchPredicting(true); setError(null); setBatchMsg(`Running predictions on batch file...`);
+    try {
+      const blob = await batchPredict(file, selectedModel);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "predictions.csv";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setBatchMsg(`Done! predictions.csv downloaded successfully.`);
+    } catch (e: any) { setError(e.message); setBatchMsg(""); }
+    finally { setBatchPredicting(false); }
+  };
+
+  /* Explain specific prediction */
+  const handleExplainPrediction = async (features: any) => {
+    setActiveTab("explain");
+    setExplaining(true); setError(null); setExplainData(null);
+    try {
+      const res = await explainPrediction(selectedModel, -1, features);
+      setExplainData(res);
+    } catch (e: any) { setError(e.message); }
+    finally { setExplaining(false); }
+  };
+  
+  const handleExplainRow = async (rowIdx: number) => {
+    setExplaining(true); setError(null); setExplainData(null); setExplainingRow(rowIdx);
+    try {
+      const res = await explainPrediction(selectedModel, rowIdx);
+      setExplainData(res);
+    } catch (e: any) { setError(e.message); }
+    finally { setExplaining(false); }
   };
 
   /* Clear */
   const handleClear = async () => {
     await deleteDataset().catch(() => {});
-    setDataset(null); setTrainResult(null); setTarget(""); setError(null); setPrediction(null);
+    setDataset(null); setTrainResult(null); setTarget(""); setError(null); setPrediction(null); setProfileData(null); setExplainData(null);
   };
 
   const currentModel = trainResult?.models.find(m => m.name === selectedModel);
@@ -209,6 +286,116 @@ export default function Home() {
               <button onClick={() => fileRef.current?.click()} className="text-[12px] text-brand hover:underline">Replace</button>
               <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleUpload(f); }}/>
             </div>
+            
+            {/* Profiling View */}
+            {!trainResult && profiling && (
+                <div className="p-5 text-center text-[13px] text-text-muted"><div className="w-6 h-6 border-2 border-brand/30 border-t-brand rounded-full animate-spin mx-auto mb-2"/> Profiling dataset...</div>
+            )}
+            
+            {!trainResult && profileData && (
+              <div className="bg-white rounded-xl border border-border overflow-hidden">
+                <div className="px-5 py-4 flex items-center justify-between bg-surface cursor-pointer hover:bg-surface-muted transition-colors" onClick={() => setShowProfile(!showProfile)}>
+                  <div>
+                    <h3 className="text-[14px] font-semibold text-text">Dataset Overview</h3>
+                    <p className="text-[12px] text-text-muted">Health score, distributions, and correlations</p>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <div className={`px-3 py-1 rounded-full text-[12px] font-bold ${profileData.overall_health_score >= 80 ? 'bg-green-100 text-green-700' : profileData.overall_health_score >= 60 ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700'}`}>
+                      Health Score: {profileData.overall_health_score}/100
+                    </div>
+                    <span className="text-text-muted">{showProfile ? "▲" : "▼"}</span>
+                  </div>
+                </div>
+                
+                {showProfile && (
+                  <div className="p-5 border-t border-border">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                      {/* Top Correlations */}
+                      <div>
+                        <h4 className="text-[13px] font-semibold text-text mb-2">Top Correlations (Pearson)</h4>
+                        {profileData.correlation_matrix.length > 0 ? (
+                            <ul className="space-y-1">
+                                {profileData.correlation_matrix.slice(0, 5).map((corr, i) => (
+                                    <li key={i} className="text-[12px] text-text-secondary">
+                                        <span className="font-medium text-text">{corr.col1}</span> ↔ <span className="font-medium text-text">{corr.col2}</span>: {corr.coefficient.toFixed(2)}
+                                        {Math.abs(corr.coefficient) > 0.7 && <span className="ml-2 text-[10px] bg-brand/10 text-brand px-1.5 py-0.5 rounded">Strong</span>}
+                                    </li>
+                                ))}
+                            </ul>
+                        ) : (
+                            <p className="text-[12px] text-text-muted">No significant correlations found.</p>
+                        )}
+                      </div>
+                      {/* Class Balance (potential targets) */}
+                      <div>
+                        <h4 className="text-[13px] font-semibold text-text mb-2">Potential Targets Class Balance</h4>
+                        {profileData.class_balance.length > 0 ? (
+                            <div className="space-y-3">
+                                {profileData.class_balance.slice(0, 3).map((cb, i) => (
+                                    <div key={i}>
+                                        <p className="text-[11px] font-medium text-text mb-1">{cb.column_name}</p>
+                                        <div className="flex w-full h-2 rounded overflow-hidden">
+                                            {cb.classes.map((cls: any, j: number) => (
+                                                <div key={j} style={{ width: `${cls.percent}%`, backgroundColor: j % 2 === 0 ? '#6366f1' : '#cbd5e1' }} title={`${cls.label}: ${cls.percent}%`} />
+                                            ))}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <p className="text-[12px] text-text-muted">No suitable categorical targets detected.</p>
+                        )}
+                      </div>
+                    </div>
+                    
+                    <h4 className="text-[13px] font-semibold text-text mb-3">Column Profiles</h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                        {profileData.columns.map(c => (
+                            <div key={c.name} className="border border-border rounded-lg p-3 bg-surface-muted/30">
+                                <div className="flex justify-between items-start mb-2">
+                                    <h5 className="text-[12px] font-semibold text-text truncate max-w-[150px]" title={c.name}>{c.name}</h5>
+                                    <span className="text-[10px] text-text-muted bg-border/50 px-1.5 py-0.5 rounded">{c.col_type}</span>
+                                </div>
+                                
+                                {c.null_count > 0 && <span className="inline-block mb-1 text-[10px] bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded">Nulls: {c.null_count} ({c.null_percent}%)</span>}
+                                {c.outlier_count > 0 && <span className="inline-block mb-1 ml-1 text-[10px] bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded">Outliers: {c.outlier_count}</span>}
+                                
+                                {c.col_type === 'numeric' && c.histogram && c.histogram.length > 0 && (
+                                    <div className="h-16 mt-2">
+                                        <ResponsiveContainer width="100%" height="100%">
+                                            <BarChart data={c.histogram}>
+                                                <Tooltip contentStyle={{fontSize: 10, padding: '2px 4px'}} formatter={(val: any) => [val, 'Count']} />
+                                                <Bar dataKey="count" fill="#94a3b8" />
+                                            </BarChart>
+                                        </ResponsiveContainer>
+                                    </div>
+                                )}
+                                {c.col_type === 'numeric' && (
+                                    <div className="grid grid-cols-2 gap-1 text-[10px] text-text-muted mt-2">
+                                        <span>Min: {c.min?.toFixed(2)}</span>
+                                        <span>Max: {c.max?.toFixed(2)}</span>
+                                        <span>Mean: {c.mean?.toFixed(2)}</span>
+                                        <span>Med: {c.median?.toFixed(2)}</span>
+                                    </div>
+                                )}
+                                
+                                {c.col_type === 'categorical' && c.top_values && (
+                                    <div className="mt-2 space-y-1">
+                                        <p className="text-[10px] text-text-muted">Top values:</p>
+                                        <div className="flex flex-wrap gap-1">
+                                            {c.top_values.slice(0,3).map((v: any, i: number) => (
+                                                <span key={i} className="text-[10px] bg-white border border-border px-1.5 py-0.5 rounded truncate max-w-[100px]" title={v.value}>{v.value}</span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Target selector + Train */}
             {!trainResult && (
@@ -289,7 +476,7 @@ export default function Home() {
               <>
                 {/* Best model banner */}
                 <div className="bg-white rounded-xl border border-brand/30 p-4 flex items-center gap-4">
-                  <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: MODEL_COLORS[trainResult.best_model] + "20" }}>
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: (MODEL_COLORS[trainResult.best_model] || "#000") + "20" }}>
                     <span className="text-lg">🏆</span>
                   </div>
                   <div className="flex-1">
@@ -312,7 +499,7 @@ export default function Home() {
                     className="text-[12px] px-3 h-8 flex items-center justify-center rounded-lg border border-brand text-brand hover:bg-brand/[0.05] transition-colors" title="Download trained model as .pkl for deployment">
                     Download Model
                   </a>
-                  <button onClick={() => { setTrainResult(null); setPrediction(null); }}
+                  <button onClick={() => { setTrainResult(null); setPrediction(null); setExplainData(null); }}
                     className="text-[12px] px-3 h-8 rounded-lg border border-border text-text-muted hover:text-brand hover:border-brand/30 transition-colors">
                     Retrain
                   </button>
@@ -322,7 +509,7 @@ export default function Home() {
                 <div className="flex gap-2 flex-wrap">
                   {trainResult.models.filter(m => !m.error).map(m => (
                     <div key={m.name} className="flex">
-                      <button onClick={() => setSelectedModel(m.name)}
+                      <button onClick={() => { setSelectedModel(m.name); setExplainData(null); setPrediction(null); }}
                         className={`flex items-center gap-2 px-4 py-2 rounded-l-xl border border-r-0 text-[12px] font-medium transition-all ${selectedModel === m.name ? "border-brand bg-brand/[0.06] text-brand" : "border-border text-text-secondary hover:border-brand/30"}`}>
                         <span className="w-2.5 h-2.5 rounded-full" style={{ background: MODEL_COLORS[m.name] }}/>
                         {m.name}
@@ -341,10 +528,10 @@ export default function Home() {
                   <div className="bg-white rounded-xl border border-border overflow-hidden">
                     {/* Tabs */}
                     <div className="flex border-b border-border">
-                      {(["metrics", "roc", "features", "predict"] as const).map(tab => (
-                        <button key={tab} onClick={() => setActiveTab(tab)}
+                      {(["metrics", "roc", "features", "predict", "explain"] as const).map(tab => (
+                        <button key={tab} onClick={() => { setActiveTab(tab); if (tab === "explain" && !explainData) handleExplainRow(explainingRow); }}
                           className={`px-5 py-3 text-[13px] font-medium capitalize transition-colors ${activeTab === tab ? "border-b-2 border-brand text-brand" : "text-text-muted hover:text-text-secondary"}`}>
-                          {tab === "roc" ? (trainResult.task_type === "regression" ? "Residual Plot" : "ROC Curve") : tab === "features" ? "Feature Importance" : tab === "predict" ? "Predict" : "Metrics"}
+                          {tab === "roc" ? (trainResult.task_type === "regression" ? "Residual Plot" : "ROC Curve") : tab === "features" ? "Feature Importance" : tab}
                         </button>
                       ))}
                     </div>
@@ -512,12 +699,12 @@ export default function Home() {
                                   <XAxis type="number" tick={{ fontSize: 11, fill: "#64748b" }}/>
                                   <YAxis type="category" dataKey="feature" tick={{ fontSize: 11, fill: "#64748b" }} width={110}/>
                                   <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }}/>
-                                  <Bar dataKey="importance" fill={MODEL_COLORS[selectedModel]} radius={[0,3,3,0]}/>
+                                  <Bar dataKey="importance" fill={MODEL_COLORS[selectedModel] || "#6366f1"} radius={[0,3,3,0]}/>
                                 </BarChart>
                               </ResponsiveContainer>
                             </>
                           ) : (
-                            <p className="text-[13px] text-text-muted">Feature importance not available for Neural Network.</p>
+                            <p className="text-[13px] text-text-muted">Feature importance not available for {selectedModel}.</p>
                           )}
                         </div>
                       )}
@@ -536,14 +723,30 @@ export default function Home() {
                               </div>
                             ))}
                           </div>
-                          <button onClick={handlePredict} disabled={predicting}
-                            className="px-5 h-9 rounded-lg bg-brand hover:bg-brand-light text-white text-[13px] font-medium disabled:opacity-40 transition-colors">
-                            {predicting ? "Predicting..." : "Predict"}
-                          </button>
+                          
+                          <div className="flex gap-2">
+                              <button onClick={handlePredict} disabled={predicting}
+                                className="px-5 h-9 rounded-lg bg-brand hover:bg-brand-light text-white text-[13px] font-medium disabled:opacity-40 transition-colors">
+                                {predicting ? "Predicting..." : "Predict"}
+                              </button>
+                              
+                              <button onClick={() => batchFileRef.current?.click()} disabled={batchPredicting}
+                                className="px-5 h-9 rounded-lg border border-border text-text hover:bg-surface-muted text-[13px] font-medium disabled:opacity-40 transition-colors">
+                                {batchPredicting ? "Running Batch..." : "Batch Predict (CSV)"}
+                              </button>
+                              <input ref={batchFileRef} type="file" accept=".csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleBatchPredict(f); }}/>
+                          </div>
+                          
+                          {batchMsg && <p className="text-[12px] text-brand mt-3">{batchMsg}</p>}
 
                           {prediction && (
                             <div className="mt-5 p-4 rounded-xl bg-surface-muted border border-border">
-                              <p className="text-[12px] text-text-muted mb-3">Prediction Result</p>
+                              <div className="flex items-center justify-between mb-3">
+                                <p className="text-[12px] text-text-muted">Prediction Result</p>
+                                <button onClick={() => handleExplainPrediction(prediction.featuresUsed)} className="text-[11px] px-2 py-1 bg-white border border-border rounded text-brand hover:border-brand/30">
+                                  Why this prediction?
+                                </button>
+                              </div>
                               <div className="flex items-center gap-3 mb-4">
                                 <div className="px-4 py-2 rounded-xl bg-brand text-white font-bold text-[18px]">
                                   {trainResult.task_type === 'regression' ? Number(prediction.prediction).toFixed(4) : prediction.prediction}
@@ -571,6 +774,57 @@ export default function Home() {
                             </div>
                           )}
                         </div>
+                      )}
+                      
+                      {/* Explain tab */}
+                      {activeTab === "explain" && (
+                          <div>
+                              <div className="flex justify-between items-center mb-4">
+                                  <p className="text-[12px] text-text-muted">SHAP value contributions to the final prediction.</p>
+                                  <div className="flex items-center gap-2 bg-surface-muted border border-border rounded px-2 py-1">
+                                      <button onClick={() => handleExplainRow(Math.max(0, explainingRow - 1))} disabled={explaining} className="text-[12px] px-1 hover:text-brand disabled:opacity-50">◀</button>
+                                      <span className="text-[12px] text-text-secondary">Row #{explainingRow}</span>
+                                      <button onClick={() => handleExplainRow(explainingRow + 1)} disabled={explaining} className="text-[12px] px-1 hover:text-brand disabled:opacity-50">▶</button>
+                                  </div>
+                              </div>
+                              
+                              {explaining && <div className="py-10 text-center text-[13px] text-text-muted"><div className="w-6 h-6 border-2 border-brand/30 border-t-brand rounded-full animate-spin mx-auto mb-2"/> Computing SHAP values...</div>}
+                              
+                              {!explaining && explainData && (
+                                  <>
+                                      <div className="mb-4 bg-white border border-border rounded-lg p-3 flex justify-between items-center">
+                                          <div>
+                                              <p className="text-[11px] text-text-muted">Base Value</p>
+                                              <p className="text-[14px] font-medium text-text">{explainData.base_value?.toFixed(4)}</p>
+                                          </div>
+                                          <div className="text-right">
+                                              <p className="text-[11px] text-text-muted">Final Prediction</p>
+                                              <p className="text-[16px] font-bold text-brand">
+                                                  {trainResult.task_type === "regression" ? explainData.predicted_value?.toFixed(4) : explainData.prediction_label}
+                                              </p>
+                                          </div>
+                                      </div>
+                                      
+                                      <ResponsiveContainer width="100%" height={350}>
+                                        <BarChart data={explainData.feature_contributions} layout="vertical" margin={{ top: 5, right: 30, left: 120, bottom: 5 }}>
+                                          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0"/>
+                                          <XAxis type="number" tick={{ fontSize: 11, fill: "#64748b" }}/>
+                                          <YAxis type="category" dataKey="feature" tickFormatter={(v, i) => `${v} = ${explainData.feature_contributions[i]?.feature_value}`} tick={{ fontSize: 11, fill: "#64748b" }} width={110}/>
+                                          <Tooltip formatter={(v: any) => Number(v).toFixed(4)} contentStyle={{ fontSize: 12, borderRadius: 8 }}/>
+                                          <Bar dataKey="shap_value" radius={2}>
+                                            {explainData.feature_contributions.map((entry: any, index: number) => (
+                                              <Cell key={`cell-${index}`} fill={entry.shap_value >= 0 ? "#6366f1" : "#ef4444"} />
+                                            ))}
+                                          </Bar>
+                                        </BarChart>
+                                      </ResponsiveContainer>
+                                      <div className="flex justify-center gap-4 mt-2">
+                                          <span className="flex items-center gap-1 text-[11px] text-text-muted"><div className="w-3 h-3 bg-indigo-500 rounded-sm"></div> Pushes Prediction Higher</span>
+                                          <span className="flex items-center gap-1 text-[11px] text-text-muted"><div className="w-3 h-3 bg-red-500 rounded-sm"></div> Pushes Prediction Lower</span>
+                                      </div>
+                                  </>
+                              )}
+                          </div>
                       )}
                     </div>
                   </div>
