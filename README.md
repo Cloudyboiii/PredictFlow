@@ -1,5 +1,7 @@
 # PredictFlow ⚡
 
+**Live Demo:** [https://predict-flow.vercel.app](https://predict-flow.vercel.app)
+
 **Automated ML Model Training & Evaluation Pipeline**
 
 Upload a CSV, select a target column, and PredictFlow automatically trains 4 ML models simultaneously, evaluates each with comprehensive metrics, and serves the best model for real-time inference.
